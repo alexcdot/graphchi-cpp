@@ -328,6 +328,8 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
         rbm_movie mov = latent_factors_inmem[vertex.edge(e)->vertex_id()];
         float observation = vertex.edge(e)->get_data();
         double prediction;
+        // Put prediction into prediction pointer
+        // user is vertex_data, mov is rbm_movie, observation is rating, float
         rbm_predict(user, mov, observation, prediction, NULL);
         double pui = prediction / rbm_scaling;
         double rui = observation / rbm_scaling;
@@ -371,7 +373,7 @@ void rbm_init(){
   logstream(LOG_INFO) << "RBM initialization ok" << std::endl;
 
 }
-int main(int argc, const char ** argv) {
+int other_main(int argc, const char ** argv) {
 
   print_copyright();
 
@@ -405,6 +407,7 @@ int main(int argc, const char ** argv) {
   }
 
   /* load initial state from disk (optional) */
+  std::cout << training << std::endl;
   if (load_factors_from_file){
     load_matrix_market_matrix(training + "_U.mm", 0, 3*D);
     load_matrix_market_matrix(training + "_V.mm", M, rbm_bins*(D+1));
