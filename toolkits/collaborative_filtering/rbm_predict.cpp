@@ -1,4 +1,4 @@
-#include "rbm.cpp"
+#include "rbm.hpp"
 
 /*
 PSEUDOCODE:
