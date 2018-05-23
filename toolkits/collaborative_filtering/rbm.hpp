@@ -29,6 +29,7 @@
 
 #include "common.hpp"
 #include "eigen_wrapper.hpp"
+#include <map>
 
 double rbm_alpha        = 0.1;
 double rbm_beta         = 0.06;
@@ -52,6 +53,8 @@ float dot(double * a, double * b){
     ret += a[i] * b[i];
   return ret;
 }
+
+std::map<int, vec> d_mat;
 
 
 #define BIAS_POS -1
@@ -108,20 +111,20 @@ struct rbm_user{
 struct rbm_movie{
   double * bi;
   double * w;
-  double * d;
+  //double * d;
 
   rbm_movie(const vertex_data& vdata){
-    vdata.pvec.resize(rbm_bins + D * rbm_bins + D);
+    //vdata.pvec.resize(rbm_bins + D * rbm_bins + D);
     bi = (double*)&vdata.pvec[0];
     w = bi + rbm_bins;
-    d = bi + rbm_bins + D * rbm_bins;
+    //d = bi + rbm_bins + D * rbm_bins;
   }
 
   rbm_movie & operator=(vertex_data & data){
-    vdata.pvec.resize(rbm_bins + D * rbm_bins + D);
+    //data.pvec.resize(rbm_bins + D * rbm_bins + D);
     bi = (double*)&data.pvec[0];
     w = bi + rbm_bins;
-    d = bi + rbm_bins + D * rbm_bins;
+    //d = bi + rbm_bins + D * rbm_bins;
     return * this;
   }
 };
@@ -274,7 +277,7 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
       if (vertex.num_inedges() > 0){
         rbm_movie mov = latent_factors_inmem[vertex.id()]; 
         setRand2(mov.w, D*rbm_bins, 0.001);
-        setRand2(mov.d, D, 0.0001);
+        setRand2((double *) &d_mat[vertex.id()], D, 0.0001);
         for(int r = 0; r < rbm_bins; ++r){
           mov.bi[r] /= (double)vertex.num_inedges();
           mov.bi[r] = log(1E-9 + mov.bi[r]);
@@ -311,7 +314,7 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
         assert(r < rbm_bins);  
         for(int k=0; k < D; k++){
           // Add a the conditional term.
-          usr.h[k] += mov.w[D*r + k] + mov.d[k];
+          usr.h[k] += mov.w[D*r + k] + d_mat[vertex.edge(e)->vertex_id()][k];
           assert(!std::isnan(usr.h[k]));
         }
       }
@@ -356,7 +359,7 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
         rbm_movie mov = latent_factors_inmem[vertex.edge(e)->vertex_id()];
         int r = (int)v1[i];
         for (int k=0; k< D;k++){
-          usr.h1[k] += mov.w[r*D+k] + mov.d[k];
+          usr.h1[k] += mov.w[r*D+k] + d_mat[vertex.edge(e)->vertex_id()][k];;
         }
         i++;
       }
@@ -400,7 +403,7 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
           assert(!std::isnan(mov.w[D*vi0+k]));
           mov.w[D*vi1+k] -= rbm_alpha * (usr.h1[k] + rbm_beta * mov.w[vi1*D+k]);
           assert(!std::isnan(mov.w[D*vi1+k]));
-          mov.d[k] += rbm_epsilon * (usr.h0[k] - usr.h1[k]);
+          d_mat[vertex.edge(e)->vertex_id()][k] += rbm_epsilon * (usr.h0[k] - usr.h1[k]);
           // Update D_mat[e * D + k] = rbm_epsilon * (usr.h0[k] - usr.h1[k]) 
         }
         i++; 
