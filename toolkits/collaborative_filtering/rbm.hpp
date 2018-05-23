@@ -54,7 +54,7 @@ float dot(double * a, double * b){
   return ret;
 }
 
-std::map<int, vec> d_mat;
+std::map<int, double *> d_mat;
 
 
 #define BIAS_POS -1
@@ -128,8 +128,6 @@ struct rbm_movie{
     return * this;
   }
 };
-
-
 
 
 float rbm_predict(const rbm_user & usr, 
@@ -277,7 +275,8 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
       if (vertex.num_inedges() > 0){
         rbm_movie mov = latent_factors_inmem[vertex.id()]; 
         setRand2(mov.w, D*rbm_bins, 0.001);
-        setRand2((double *) &d_mat[vertex.id()], D, 0.0001);
+        d_mat[vertex.id()] = new double [D];
+        setRand2(d_mat[vertex.id()], D, 0.0001);
         for(int r = 0; r < rbm_bins; ++r){
           mov.bi[r] /= (double)vertex.num_inedges();
           mov.bi[r] = log(1E-9 + mov.bi[r]);
