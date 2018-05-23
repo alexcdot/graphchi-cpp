@@ -32,6 +32,7 @@
 
 double rbm_alpha        = 0.1;
 double rbm_beta         = 0.06;
+double rbm_epsilon      = 0.0001;
 int    rbm_bins         = 6;
 double rbm_scaling      = 1;
 double rbm_mult_step_dec= 0.9;
@@ -52,9 +53,10 @@ float dot(double * a, double * b){
   return ret;
 }
 
+
 #define BIAS_POS -1
 struct vertex_data {
-  vec pvec; //storing the feature vector
+  vec pvec; //storing the feature vector with length (D*3)
   double bias;
 
   vertex_data() {
@@ -106,15 +108,20 @@ struct rbm_user{
 struct rbm_movie{
   double * bi;
   double * w;
+  double * d;
 
   rbm_movie(const vertex_data& vdata){
+    vdata.pvec.resize(rbm_bins + D * rbm_bins + D);
     bi = (double*)&vdata.pvec[0];
     w = bi + rbm_bins;
+    d = bi + rbm_bins + D * rbm_bins;
   }
 
   rbm_movie & operator=(vertex_data & data){
+    vdata.pvec.resize(rbm_bins + D * rbm_bins + D);
     bi = (double*)&data.pvec[0];
     w = bi + rbm_bins;
+    d = bi + rbm_bins + D * rbm_bins;
     return * this;
   }
 };
@@ -236,6 +243,12 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
    */
   void update(graphchi_vertex<VertexDataType, EdgeDataType> &vertex, graphchi_context &gcontext) {
         
+    /*
+     * Initialize the user vectors
+     * Set pvec and bias to zeros
+     * Start adding up the observations into mov.bi,
+     * +1 for every value in a bin
+     */
 
     if (gcontext.iteration == 0){
       if (is_user(vertex.id()) && vertex.num_outedges() > 0){
@@ -251,10 +264,17 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
       }
       return;
     }
+    /*
+     * Set mov.w to random values about 0.001
+     * For every bin, divide the mov.bi by the number of users who've watched
+     * and take its log
+     */
+
     else if (gcontext.iteration == 1){
       if (vertex.num_inedges() > 0){
         rbm_movie mov = latent_factors_inmem[vertex.id()]; 
         setRand2(mov.w, D*rbm_bins, 0.001);
+        setRand2(mov.d, D, 0.0001);
         for(int r = 0; r < rbm_bins; ++r){
           mov.bi[r] /= (double)vertex.num_inedges();
           mov.bi[r] = log(1E-9 + mov.bi[r]);
@@ -270,6 +290,14 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
     }
     //go over all user nodes
     if (is_user(vertex.id()) && vertex.num_outedges()){
+      /*
+       * Set pvec to all zeros
+       * Set v1 to a zero vector equal to length of number of movies rated
+       * 
+       * For each observation, set the hidden unit to the mov.w value
+       * corresponding to the observation and the hidden unit
+       * usr.h is the continuous version of hidden units
+       */
       vertex_data & user = latent_factors_inmem[vertex.id()]; 
       user.pvec = zeros(3*D);
       rbm_user usr(user);
@@ -282,11 +310,17 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
         int r = (int)(observation / rbm_scaling);
         assert(r < rbm_bins);  
         for(int k=0; k < D; k++){
-          usr.h[k] += mov.w[D*r + k];
+          // Add a the conditional term.
+          usr.h[k] += mov.w[D*r + k] + mov.d[k];
           assert(!std::isnan(usr.h[k]));
         }
       }
 
+      /*
+       * For every hidden unit, make it equal to its sigmoid
+       * Then cast it against a bernoulli distribution to 1 or 0
+       * And store that value in h0 (first hallucination of hidden)
+       */
       for(int k=0; k < D; k++){
         usr.h[k] = sigmoid(usr.h[k]);
         if (drand48() < usr.h[k]) 
@@ -294,6 +328,10 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
         else usr.h0[k] = 0;
       }
 
+      /*
+       * Create a prediction with the current user and all movies
+       * Store this first hallucination of v (CD-1) in c1
+       */
 
       int i = 0;
       double prediction;
@@ -306,12 +344,19 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
         i++;
       }
 
+      /*
+       * Hallucinate the hidden units again (second time)
+       * For each hidden unit, set it equal to the weight
+       * at every movie and visible (first gibbs sample) combo
+       * Then cast sigmoid of that value to 1 or 0.
+       */
+
       i = 0;
       for(int e=0; e < vertex.num_outedges(); e++) {
         rbm_movie mov = latent_factors_inmem[vertex.edge(e)->vertex_id()];
         int r = (int)v1[i];
         for (int k=0; k< D;k++){
-          usr.h1[k] += mov.w[r*D+k];
+          usr.h1[k] += mov.w[r*D+k] + mov.d[k];
         }
         i++;
       }
@@ -322,6 +367,19 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
           usr.h1[k] = 1;
         else usr.h1[k] = 0;
       }
+
+      /*
+       * Get a second hallucination of the visible units (CD-2)
+       * Calculate the difference for each movie -> gradient descent amount
+       * vi0 is the training input value
+       * vi1 is the second hallucination value
+       * For each of the hidden units, set mov.w at the input value to be
+       * the positive phase, with the sum of the CD-0 hidden unit minus the
+       * old mov.w there.
+       * Set mov.w at the first hallucinated visible value to be the negative
+       * phase, with the sum of the CD-1 hidden unit and old mov.w there
+       * rbm_beta is momentum!
+       */
 
       i = 0;
       for(int e=0; e < vertex.num_outedges(); e++) {
@@ -342,6 +400,8 @@ struct RBMVerticesInMemProgram : public GraphChiProgram<VertexDataType, EdgeData
           assert(!std::isnan(mov.w[D*vi0+k]));
           mov.w[D*vi1+k] -= rbm_alpha * (usr.h1[k] + rbm_beta * mov.w[vi1*D+k]);
           assert(!std::isnan(mov.w[D*vi1+k]));
+          mov.d[k] += rbm_epsilon * (usr.h0[k] - usr.h1[k]);
+          // Update D_mat[e * D + k] = rbm_epsilon * (usr.h0[k] - usr.h1[k]) 
         }
         i++; 
       }
