@@ -33,7 +33,7 @@
 
 double rbm_alpha        = 0.1;
 double rbm_beta         = 0.06;
-double rbm_epsilon      = 0.0001;
+double rbm_epsilon      = 0.001;
 int    rbm_bins         = 6;
 double rbm_scaling      = 1;
 double rbm_mult_step_dec= 0.9;
